@@ -6,6 +6,7 @@ import { embedSingle } from "../embedding/mistral.js";
 import { getProjectCollection, getGlobalCollection } from "../store/collection.js";
 import { toWslPath } from "../utils/paths.js";
 import { log } from "../utils/config.js";
+import type { ProjectPathResolver } from "../server-factory.js";
 
 const formatResult = (r: { score: number; fields: Record<string, unknown>; source: string }, i: number) => {
   const f = r.fields;
@@ -26,7 +27,7 @@ const formatResult = (r: { score: number; fields: Record<string, unknown>; sourc
   return parts.join("\n");
 };
 
-export function registerSearchTool(server: McpServer) {
+export function registerSearchTool(server: McpServer, resolveRoot: ProjectPathResolver) {
   server.tool(
     "search",
     "Semantic search across stored knowledge and indexed code",
@@ -35,16 +36,13 @@ export function registerSearchTool(server: McpServer) {
       scope: z.enum(["project", "global", "both"]).default("both").describe("Search scope"),
       limit: z.number().min(1).max(50).default(10).describe("Max results to return"),
       filter: z.string().optional().describe("Zvec filter expression"),
-      project_path: z.string().optional().describe("Windows project path (required when scope includes project)"),
+      project_path: z.string().optional().describe("Windows project path (defaults to client workspace root)"),
     },
-    async ({ query, scope, limit, filter, project_path }) => {
+    async ({ query, scope: requestedScope, limit, filter, project_path }) => {
       try {
-        if ((scope === "project" || scope === "both") && !project_path) {
-          return {
-            content: [{ type: "text" as const, text: "project_path is required when scope includes project" }],
-            isError: true,
-          };
-        }
+        const needsProject = requestedScope === "project" || requestedScope === "both";
+        const effectivePath = needsProject ? (project_path ?? await resolveRoot()) : undefined;
+        const scope = needsProject && !effectivePath ? "global" : requestedScope;
 
         const vec = await embedSingle(query);
         const hits: { id: string; score: number; fields: Record<string, unknown>; source: string }[] = [];
@@ -57,8 +55,8 @@ export function registerSearchTool(server: McpServer) {
           params: { indexType: ZVecIndexType.HNSW, ef: 300 },
         };
 
-        if ((scope === "project" || scope === "both") && project_path) {
-          const col = getProjectCollection(toWslPath(project_path));
+        if ((scope === "project" || scope === "both") && effectivePath) {
+          const col = getProjectCollection(toWslPath(effectivePath));
           const q = filter ? { ...baseQuery, filter } : baseQuery;
           const docs = col.querySync(q);
           for (const d of docs) hits.push({ id: d.id, score: d.score, fields: d.fields, source: "project" });

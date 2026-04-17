@@ -6,6 +6,7 @@ import { getProjectCollection, collectionPath } from "../store/collection.js";
 import { toWslPath } from "../utils/paths.js";
 import { config, log } from "../utils/config.js";
 import { discoverFiles, chunkFile } from "../indexer/chunker.js";
+import type { ProjectPathResolver } from "../server-factory.js";
 
 type MtimeCache = Record<string, number>;
 
@@ -21,18 +22,25 @@ const saveMtimeCache = (cachePath: string, cache: MtimeCache) => {
   writeFileSync(cachePath, JSON.stringify(cache));
 };
 
-export function registerIndexTool(server: McpServer) {
+export function registerIndexTool(server: McpServer, resolveRoot: ProjectPathResolver) {
   server.tool(
     "index",
     "Index source files from a project directory for semantic search. Always does a full scan; unchanged content is deduplicated by content hash.",
     {
-      project_path: z.string().describe("Windows project path to index"),
+      project_path: z.string().optional().describe("Windows project path to index (defaults to client workspace root)"),
       patterns: z.array(z.string()).optional().describe('File extensions to include (e.g. [".ts", ".py"])'),
     },
     async ({ project_path, patterns }) => {
       try {
+        const effectivePath = project_path ?? await resolveRoot();
+        if (!effectivePath) {
+          return {
+            content: [{ type: "text" as const, text: "project_path is required (no workspace root detected)" }],
+            isError: true,
+          };
+        }
         const t0 = Date.now();
-        const wslPath = toWslPath(project_path);
+        const wslPath = toWslPath(effectivePath);
         const colPath = collectionPath(wslPath);
         const cachePath = `${colPath}/mtimes.json`;
 

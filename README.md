@@ -7,7 +7,7 @@
 *AI Knowledge Interface — persistent, searchable, context that survives between sessions.*
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178c6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![MCP](https://img.shields.io/badge/MCP-stdio-8B5CF6?style=flat-square)](https://modelcontextprotocol.io/)
+[![MCP](https://img.shields.io/badge/MCP-HTTP-8B5CF6?style=flat-square)](https://modelcontextprotocol.io/)
 [![Zvec](https://img.shields.io/badge/Zvec-HNSW-FF6B35?style=flat-square)](https://github.com/alibaba/zvec)
 [![Mistral](https://img.shields.io/badge/Mistral-Codestral_Embed-000?style=flat-square)](https://mistral.ai/)
 
@@ -31,10 +31,14 @@ Aiki returns: the actual auth middleware code, relevant config, and past decisio
 ## Architecture
 
 ```
-Claude Code / AI Agent
-    │ stdio (JSON-RPC)
-    ▼
-Aiki MCP Server (Node.js, WSL)
+Claude Code #1 ──┐
+Claude Code #2 ──┤ HTTP (localhost:4242/mcp)
+Claude Code #N ──┘
+         │
+         ▼
+Aiki HTTP Server (Node.js, single daemon in WSL)
+    │
+    ├── Per-session McpServer + Transport
     │
     ├── Mistral Codestral Embed (1536-dim, code-optimized)
     │   └── REST: POST /v1/embeddings
@@ -43,6 +47,8 @@ Aiki MCP Server (Node.js, WSL)
         ├── ~/aiki/collections/<project-hash>/  (per-project)
         └── ~/aiki/global/                      (cross-project)
 ```
+
+One persistent HTTP server, N concurrent Claude Code clients. Zvec's exclusive file lock is held by a single process — no contention.
 
 ## Tools
 
@@ -98,30 +104,78 @@ pnpm install
 pnpm build
 ```
 
+### Run as systemd daemon (recommended)
+
+Create environment file:
+
+```bash
+mkdir -p ~/.config/aiki
+cat > ~/.config/aiki/env << 'EOF'
+MISTRAL_API_KEY=your_key_here
+AIKI_PORT=4242
+EOF
+```
+
+Create systemd unit:
+
+```ini
+# /etc/systemd/system/aiki.service
+[Unit]
+Description=Aiki MCP Server
+After=network.target
+
+[Service]
+Type=simple
+User=aiki
+WorkingDirectory=/mnt/c/Users/Volve/Desktop/wok/stuff/aiki
+ExecStart=/usr/local/bin/node dist/server.js
+Restart=on-failure
+RestartSec=3
+EnvironmentFile=/home/aiki/.config/aiki/env
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now aiki
+```
+
 ### Register with Claude Code
 
 ```bash
-claude mcp add -s user aiki -- \
-  wsl -d Debian -- \
-  env MISTRAL_API_KEY=your_key_here \
-  node /mnt/c/path/to/aiki/dist/server.js
+claude mcp add --transport http -s user aiki http://localhost:4242/mcp
 ```
 
 ### Verify
 
 ```bash
-# Should respond with MCP initialize handshake
-echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}' \
-  | wsl -d Debian -- env MISTRAL_API_KEY=... node /mnt/c/path/to/aiki/dist/server.js
+# Health check from Windows
+curl http://localhost:4242/health
+# → {"status":"ok","sessions":0,"uptime":...}
 ```
 
+## Endpoints
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/mcp` | MCP JSON-RPC messages |
+| GET | `/mcp` | SSE stream (per-session) |
+| DELETE | `/mcp` | Session termination |
+| GET | `/health` | Server status, session count, uptime |
+
 ## Design Decisions
+
+**Why HTTP over stdio?** — Stdio spawns a separate process per Claude Code terminal. Zvec uses exclusive file locks — only one process can hold the write lock. HTTP runs a single daemon, all clients share one process and one lock.
 
 **Why Zvec over Chroma/Pinecone/Qdrant?** — In-process native C++ with zero network overhead. Collections are memory-mapped files on ext4. No server to manage.
 
 **Why Mistral Codestral Embed?** — 1536-dim, optimized for code understanding. Handles TypeScript, Rust, Python, SQL, Vue, and natural language queries against all of them.
 
-**Why WSL?** — Zvec's native bindings require Linux. The stdio MCP transport bridges Windows (Claude Code) to Linux (Aiki) transparently.
+**Why WSL?** — Zvec's native bindings require Linux. HTTP transport bridges Windows (Claude Code) to Linux (Aiki) over `localhost:4242`.
 
 **Why content-hash IDs?** — Deterministic deduplication. Re-indexing unchanged code is a no-op at the vector DB level. Re-remembering the same knowledge updates rather than duplicates.
 

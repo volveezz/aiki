@@ -1,7 +1,6 @@
 import { readFileSync, statSync, readdirSync } from "fs";
 import { join, extname, relative, basename } from "path";
 import { contentHash } from "../utils/paths.js";
-import { log } from "../utils/config.js";
 
 export interface Chunk {
   id: string;
@@ -61,12 +60,16 @@ const SKIP_DIRS = new Set([
   "node_modules", ".git", "dist", "build", ".next", ".nuxt",
   "__pycache__", ".cache", "coverage", ".turbo", ".output",
   ".vscode", ".cursor", ".idea", ".fleet", ".zed", ".windsurf",
-  ".claude",
+  ".claude", ".pnpm-store", ".yarn", ".bun",
+  "vendor", "target",
+  ".svelte-kit", ".angular", ".parcel-cache", ".terraform", ".nx",
 ]);
 
 const SKIP_FILES = new Set([
   "claude.md", "claude.local.md", "agents.md", "opencode.md",
   "conventions.md", ".cursorrules", ".windsurfrules",
+  "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb",
+  "composer.lock", "poetry.lock", "gemfile.lock", "packages.lock.json",
 ]);
 
 const DOC_EXTS = new Set([".md", ".mdc"]);
@@ -108,18 +111,29 @@ function parseGitignore(projectPath: string): (rel: string) => boolean {
         pat = pat.slice(1);
       }
 
+      let anchored = false;
+      if (pat.startsWith("/")) {
+        anchored = true;
+        pat = pat.slice(1);
+      }
+
+      const bare = pat.endsWith("/") ? pat.slice(0, -1) : pat;
+      if (!anchored && bare.includes("/")) anchored = true;
+
       let regex = pat
-        .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+        .replace(/[.+${}()|\\]/g, "\\$&")
         .replace(/\*\*/g, "{{STAR2}}")
         .replace(/\*/g, "[^/]*")
         .replace(/\?/g, "[^/]")
         .replace(/\{\{STAR2\}\}/g, ".*");
 
+      const prefix = anchored ? "^" : "(^|/)";
+
       if (pat.endsWith("/")) {
         regex = regex.slice(0, -1);
-        regex = `(^|/)${regex}(/|$)`;
+        regex = `${prefix}${regex}(/|$)`;
       } else {
-        regex = `(^|/)${regex}($|/)`;
+        regex = `${prefix}${regex}($|/)`;
       }
 
       try {
@@ -146,8 +160,8 @@ export function discoverFiles(
   patterns?: string[],
 ): DiscoveredFile[] {
   const isIgnored = parseGitignore(projectPath);
-  const customExts = patterns
-    ? new Set(patterns.map((p) => (p.startsWith(".") ? p : `.${p}`)))
+  const customPatterns = patterns
+    ? patterns.map((p) => (p.startsWith(".") ? p : `.${p}`))
     : null;
   const files: DiscoveredFile[] = [];
 
@@ -161,7 +175,7 @@ export function discoverFiles(
 
     for (const e of entries) {
       const full = join(cur, e.name);
-      const rel = relative(projectPath, full);
+      const rel = relative(projectPath, full).replace(/\\/g, "/");
 
       if (e.isDirectory()) {
         if (SKIP_DIRS.has(e.name) || isIgnored(rel)) continue;
@@ -170,7 +184,10 @@ export function discoverFiles(
         if (SKIP_FILES.has(e.name.toLowerCase())) continue;
         const ext = extname(e.name).toLowerCase();
         if (BINARY_EXTS.has(ext)) continue;
-        if (!(customExts ?? SUPPORTED_EXTS).has(ext)) continue;
+        const matchesCustom = customPatterns
+          ? customPatterns.some((p) => e.name.toLowerCase().endsWith(p))
+          : SUPPORTED_EXTS.has(ext);
+        if (!matchesCustom) continue;
         if (isIgnored(rel)) continue;
 
         try {
@@ -197,7 +214,7 @@ export function chunkFile(file: DiscoveredFile) {
   const name = basename(file.fullPath);
   const chunks: Chunk[] = [];
 
-  if (lines.length <= 200) {
+  if (lines.length <= 150) {
     chunks.push({
       id: contentHash(`${file.relPath}:full`),
       content,
@@ -212,7 +229,6 @@ export function chunkFile(file: DiscoveredFile) {
     const size = 150;
     const overlap = 30;
     let start = 0;
-    let idx = 0;
 
     while (start < lines.length) {
       const end = Math.min(start + size, lines.length);
@@ -228,7 +244,6 @@ export function chunkFile(file: DiscoveredFile) {
         lineEnd: end,
       });
       start += size - overlap;
-      idx++;
     }
   }
 

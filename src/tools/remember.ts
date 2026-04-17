@@ -4,8 +4,9 @@ import { embedSingle } from "../embedding/mistral.js";
 import { getProjectCollection, getGlobalCollection } from "../store/collection.js";
 import { toWslPath, contentHash } from "../utils/paths.js";
 import { log } from "../utils/config.js";
+import type { ProjectPathResolver } from "../server-factory.js";
 
-export function registerRememberTool(server: McpServer) {
+export function registerRememberTool(server: McpServer, resolveRoot: ProjectPathResolver) {
   server.tool(
     "remember",
     "Store knowledge for future retrieval — decisions, patterns, bugs, preferences",
@@ -17,7 +18,7 @@ export function registerRememberTool(server: McpServer) {
         .default("decision")
         .describe("Knowledge type (project scope)"),
       tags: z.array(z.string()).default([]).describe("Freeform tags for filtering"),
-      project_path: z.string().optional().describe("Windows project path (required for project scope)"),
+      project_path: z.string().optional().describe("Windows project path (defaults to client workspace root)"),
       category: z
         .enum(["style", "pattern", "preference", "solution"])
         .optional()
@@ -26,18 +27,19 @@ export function registerRememberTool(server: McpServer) {
     },
     async ({ content, scope, chunk_type, tags, project_path, category, topic }) => {
       try {
+        const effectivePath = scope === "project" ? (project_path ?? await resolveRoot()) : (project_path ?? undefined);
         const id = contentHash(content);
         const embedding = await embedSingle(content);
 
         if (scope === "project") {
-          if (!project_path) {
+          if (!effectivePath) {
             return {
-              content: [{ type: "text" as const, text: "project_path is required for project scope" }],
+              content: [{ type: "text" as const, text: "project_path is required for project scope (no workspace root detected)" }],
               isError: true,
             };
           }
 
-          const col = getProjectCollection(toWslPath(project_path));
+          const col = getProjectCollection(toWslPath(effectivePath));
           col.upsertSync({
             id,
             vectors: { embedding },
@@ -73,7 +75,7 @@ export function registerRememberTool(server: McpServer) {
             topic,
             content,
             confidence: 1,
-            source_project: project_path ? toWslPath(project_path) : "",
+            source_project: effectivePath ? toWslPath(effectivePath) : "",
           },
         });
         col.optimizeSync();

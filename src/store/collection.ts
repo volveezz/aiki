@@ -124,6 +124,77 @@ export function getGlobalCollection() {
   return collection;
 }
 
+export function deleteFromCollection(projectPath: string, ids: string[]) {
+  const collection = getProjectCollection(projectPath);
+  return collection.deleteSync(ids);
+}
+
+export function deleteByFilter(projectPath: string, filter: string) {
+  const collection = getProjectCollection(projectPath);
+  return collection.deleteByFilterSync(filter);
+}
+
+export function deleteGlobal(ids: string[]) {
+  const collection = getGlobalCollection();
+  return collection.deleteSync(ids);
+}
+
+export function deleteGlobalByFilter(filter: string) {
+  const collection = getGlobalCollection();
+  return collection.deleteByFilterSync(filter);
+}
+
+export function purgeProject(projectPath: string) {
+  const path = collectionPath(projectPath);
+  const cached = cache.get(path);
+  if (cached) {
+    cached.destroySync();
+    cache.delete(path);
+    log("info", `Purged project collection: ${path}`);
+    return true;
+  }
+
+  if (existsSync(path)) {
+    const collection = openOrCreate(path, "project", PROJECT_SCHEMA);
+    collection.destroySync();
+    log("info", `Purged project collection: ${path}`);
+    return true;
+  }
+
+  return false;
+}
+
+export function purgeGlobal() {
+  const path = config.paths.globalBase;
+  const cached = cache.get(path);
+  if (cached) {
+    cached.destroySync();
+    cache.delete(path);
+    log("info", `Purged global collection`);
+    return true;
+  }
+
+  if (existsSync(path)) {
+    const collection = openOrCreate(path, "global", GLOBAL_SCHEMA);
+    collection.destroySync();
+    log("info", `Purged global collection`);
+    return true;
+  }
+
+  return false;
+}
+
+export function getStats(projectPath?: string) {
+  if (projectPath) {
+    const path = collectionPath(projectPath);
+    if (!cache.has(path) && !existsSync(path)) return null;
+    return getProjectCollection(projectPath).stats;
+  }
+  const path = config.paths.globalBase;
+  if (!cache.has(path) && !existsSync(path)) return null;
+  return getGlobalCollection().stats;
+}
+
 export function closeAll() {
   for (const [path, collection] of cache) {
     try {

@@ -20,6 +20,7 @@ export async function embed(texts: string[]) {
           model: config.mistral.model,
           input: truncated,
         }),
+        signal: AbortSignal.timeout(30_000),
       });
 
       if (response.status === 429) {

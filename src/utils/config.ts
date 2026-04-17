@@ -7,6 +7,12 @@ if (!MISTRAL_API_KEY) {
   process.exit(1);
 }
 
+const AIKI_PORT = parseInt(process.env.AIKI_PORT ?? "4242", 10);
+if (Number.isNaN(AIKI_PORT)) {
+  process.stderr.write("[aiki:fatal] AIKI_PORT must be a valid integer\n");
+  process.exit(1);
+}
+
 export const config = {
   mistral: {
     apiKey: MISTRAL_API_KEY,
@@ -20,6 +26,9 @@ export const config = {
     collectionsBase: join(homedir(), "aiki", "collections"),
     globalBase: join(homedir(), "aiki", "global"),
     logDir: join(homedir(), "aiki", "logs"),
+  },
+  server: {
+    port: AIKI_PORT,
   },
 } as const;
 
