@@ -20,5 +20,6 @@
     "onlyBuiltDependencies": [
       "@zvec/zvec"
     ]
-  }
+  },
+  "license": "MIT"
 }
